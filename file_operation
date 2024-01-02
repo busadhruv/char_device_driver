@@ -1,0 +1,131 @@
+File Operations
+The file_operations structure is how a char driver sets up this connection. 
+The structure, defined in , is a collection of function pointers. 
+Each open file is associated with its own set of functions (by including a field called f_op that points to a file_operations structure). 
+The operations are mostly in charge of implementing the system calls and are therefore named open, read, and so on. 
+We can consider the file to be an “object” and the functions operating on it to be its “methods,” using object-oriented programming terminology to denote actions declared by an object to act on itself. 
+
+struct module *owner;
+  The first field is a pointer to the module that "owns" the structure.
+  It prevents the module from being unloaded while its operations are in use.
+  Usually initialized to THIS_MODULE, a macro in <linux/module.h>.
+
+loff_t (*llseek)(struct file *, loff_t, int);
+  The llseek method changes the current read/write position in a file.
+  The new position is returned as a positive value.
+  The loff_t parameter is a long offset, at least 64 bits wide on 32-bit platforms.
+  Errors are signaled by a negative return value.
+  If NULL, seek calls will modify the position counter in the file structure.
+
+ssize_t (*read)(struct file *, char __user *, size_t, loff_t *);
+  Used to retrieve data from the device.
+  A null pointer here causes the read system call to fail with -EINVAL.
+  A nonnegative return value represents the number of bytes successfully read.
+
+ssize_t (*aio_read)(struct kiocb *, char __user *, size_t, loff_t);
+  Initiates an asynchronous read.
+  If NULL, operations will be processed synchronously by read.
+
+ssize_t (*write)(struct file *, const char __user *, size_t, loff_t *);
+  Send data to the device.
+  If NULL, -EINVAL is returned to the program calling the write system call.
+  The return value, if nonnegative, represents the number of bytes successfully written.
+
+ssize_t (*aio_write)(struct kiocb *, const char __user *, size_t, loff_t *);
+  Initiates an asynchronous write operation on the device.
+
+int (*readdir)(struct file *, void *, filldir_t);
+  This field should be NULL for device files.
+  It is used for reading directories and is useful only for filesystems.
+
+unsigned int (*poll)(struct file *, struct poll_table_struct *);
+  The poll method is the backend for poll, epoll, and select system calls.
+  It returns a bit mask indicating whether non-blocking reads or writes are possible.
+  If left NULL, the device is assumed to be both readable and writable without blocking.
+
+int (*ioctl)(struct inode *, struct file *, unsigned int, unsigned long);
+  The ioctl system call allows issuing device-specific commands.
+  If the device doesn't provide an ioctl method, the system call returns -ENOTTY.
+
+int (*mmap)(struct file *, struct vm_area_struct *);
+  Used to request a mapping of device memory to a process's address space.
+  If NULL, the mmap system call returns -ENODEV.
+
+int (*open)(struct inode *, struct file *);
+  The first operation performed on the device file.
+  If NULL, opening the device always succeeds, but your driver isn't notified.
+
+int (*flush)(struct file *);
+  Invoked when a process closes its copy of a file descriptor for a device.
+  Used to execute (and wait for) any outstanding operations on the device.
+  If NULL, the kernel ignores the user application request.
+
+int (*release)(struct inode *, struct file *);
+  Invoked when the file structure is being released.
+  If NULL, it doesn't affect the release process.
+
+int (*fsync)(struct file *, struct dentry *, int);
+  The back end of the fsync system call, used to flush any pending data.
+  If NULL, the system call returns -EINVAL.
+
+int (*aio_fsync)(struct kiocb *, int);
+  Asynchronous version of the fsync method.
+
+int (*fasync)(int, struct file *, int);
+  Used to notify the device of a change in its FASYNC flag.
+  Can be NULL if the driver doesn’t support asynchronous notification.
+
+int (*lock)(struct file *, int, struct file_lock *);
+  Implements file locking; generally not implemented by device drivers.
+
+ssize_t (*readv)(struct file *, const struct iovec *, unsigned long, loff_t *);
+ssize_t (*writev)(struct file *, const struct iovec *, unsigned long, loff_t *);
+  Implement scatter/gather read and write operations.
+  If NULL, read and write methods are called (perhaps more than once).
+
+ssize_t (*sendfile)(struct file *, loff_t *, size_t, read_actor_t, void *);
+  Implements the read side of the sendfile system call.
+  Device drivers usually leave sendfile NULL.
+
+ssize_t (*sendpage)(struct file *, struct page *, int, size_t, loff_t *, int);
+  Called by the kernel to send data, one page at a time, to the corresponding file.
+  Device drivers usually do not implement sendpage.
+
+unsigned long (*get_unmapped_area)(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
+  Finds a suitable location in the process’s address space to map in a memory segment on the underlying device.
+  Drivers can leave this method NULL in most cases.
+
+int (*check_flags)(int);
+  Allows a module to check the flags passed to an fcntl(F_SETFL...) call.
+
+int (*dir_notify)(struct file *, unsigned long);
+  Invoked when an application uses fcntl to request directory change notifications.
+  Useful only to filesystems; drivers need not implement dir_notify.
+
+The scull device driver implements only the most important device methods. Its file_operations structure is initialized as follows: 
+
+struct file_operations scull_fops = {
+ .owner = THIS_MODULE, 
+.llseek = scull_llseek, 
+.read = scull_read, 
+.write = scull_write, 
+.ioctl = scull_ioctl, 
+.open = scull_open, 
+.release = scull_release, 
+}; 
+
+The File Structure
+
+The file structure in a Linux character device driver represents an open file and is essential for communication between user-space applications and the kernel. Key fields in this structure include:
+mode_t f_mode: Identifies whether the file is readable, writable, or both. Checking this field can be useful in functions like open or ioctl to ensure proper permissions.
+loff_t f_pos: Maintains the current reading or writing position in the file. Typically, drivers read this value to determine the current file position, and it is updated by read and write operations.
+unsigned int f_flags: Represents file flags such as O_RDONLY, O_NONBLOCK, and O_SYNC. Drivers may check the O_NONBLOCK flag to determine if non-blocking operation is requested.
+struct file_operations *f_op: Points to the file operations associated with the file. These operations, defined in the struct file_operations, include functions like read, write, and llseek.
+void *private_data: A pointer set by the open system call, which can be utilized by the driver to store private data or state information. It is often used to preserve state across different system calls.
+struct dentry *f_dentry: Refers to the directory entry (dentry) associated with the file. While device drivers may not directly interact with dentry structures, accessing the inode structure through filp->f_dentry->d_inode can be important for certain operations.
+
+
+
+
+
+
